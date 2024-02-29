@@ -9,7 +9,7 @@ from bpmfwfft.grids import RecGrid
 from bpmfwfft.grids import LigGrid
 import copy
 import pickle as p
-from util import c_sasa
+from bpmfwfft.util import c_sasa, c_points_to_grid
 
 import sys
 import glob
@@ -20,10 +20,10 @@ parser.add_argument("--system",                      type=str, default="2OOB_A:B
 args = parser.parse_args()
 
 if socket.gethostname() == 'jim-Mint':
-    ppi_path = '/media/jim/Research_TWO/FFT_PPI'
+    ppi_path = '/mnt/sasa/FFT_PPI'
     home = '/home/jim'
 else:
-    ppi_path = '/home/jtufts/Desktop/FFT_PPI'
+    ppi_path = '/mnt/sasa/FFT_PPI'
     home = '/home/jtufts'
 
 def rmsd(P: np.ndarray, Q: np.ndarray, **kwargs) -> float:
@@ -154,10 +154,10 @@ def regplot(trans_scores, delta_sasas, colors, name, num, system):
 
 
 def get_grid_nc(system):
-    if not os.path.exists(f"/media/jim/Research_TWO/FFT_PPI/2.redock/7.analysis/{system}/sasa"):
-        os.mkdir(f"/media/jim/Research_TWO/FFT_PPI/2.redock/7.analysis/{system}/sasa")
+    if not os.path.exists(f"{ppi_path}/2.redock/7.analysis/{system}/sasa2"):
+        os.mkdir(f"{ppi_path}/2.redock/7.analysis/{system}/sasa2")
     grid_path = f'{ppi_path}/2.redock/4.receptor_grid/{system}'
-    grid_nc = '%s/shrakerupley.nc'%grid_path
+    grid_nc = '%s/sasa.nc'%grid_path
     
     return grid_nc
 
@@ -182,7 +182,7 @@ def get_grids(system):
     rec_inpcrd = f"{ppi_path}/2.redock/2.minimize/{system}/receptor.inpcrd"
 
     bsite_file = None
-    grid_nc_file = f"{ppi_path}/2.redock/4.receptor_grid/{system}/shrakerupley.nc"
+    grid_nc_file = f"{ppi_path}/2.redock/4.receptor_grid/{system}/sasa.nc"
 
     lig_prmtop = f"{ppi_path}/2.redock/1.amber/{system}/ligand.prmtop"
     # lig_inpcrd = f"{ppi_path}/2.redock/2.minimze/2OOB_A:B/ligand.inpcrd"
@@ -203,11 +203,11 @@ def get_grids(system):
 
     lig_grid = _create_lig_grid(lig_prmtop, lj_sigma_scal_fact, lc_scale, ls_scale, lm_scale, lig_inpcrd, rec_grid)
 
-    return rec_grid, lig_grid, sasa, occupancy, rec_disp, lig_rot 
+    return rec_grid, lig_grid, sasa, occupancy, rec_disp, lig_rot, counts 
 
 
 def fft_plot(system):
-    rec_grid, lig_grid, sasa, occupancy, rec_disp, lig_rot = get_grids(system)
+    rec_grid, lig_grid, sasa, occupancy, rec_disp, lig_rot, counts = get_grids(system)
     lig_grid._move_ligand_to_lower_corner()
     ref_disp = rec_disp - lig_grid._displacement*lig_grid._spacing
     lig_grid.translate_ligand(np.array(ref_disp))
@@ -221,13 +221,14 @@ def fft_plot(system):
 
     rotations = {}
     
-    r_grid_path = f"/media/jim/Research_TWO/FFT_PPI/2.redock/4.receptor_grid/{system}/r_grid.p"
+    r_grid_path = f"{ppi_path}/2.redock/4.receptor_grid/{system}/r_grid.p"
     if os.path.exists(r_grid_path):
-        r_grid = p.load(open(f"/media/jim/Research_TWO/FFT_PPI/2.redock/4.receptor_grid/{system}/r_grid.p", "rb"))
+        r_grid = p.load(open(f"{ppi_path}/2.redock/4.receptor_grid/{system}/r_grid.p", "rb"))
     else:
         r_grid = np.zeros((occupancy.shape), dtype=np.float64)
-        r_grid, r_areas = c_sasa(rec_grid._crd, rec_grid._prmtop["VDW_RADII"], rec_grid._spacing, 1.4, 960, r_grid)
-        p.dump(r_grid, open(f"/media/jim/Research_TWO/FFT_PPI/2.redock/4.receptor_grid/{system}/r_grid.p", "wb"))
+        r_grid = c_sasa(rec_grid._crd, rec_grid._prmtop["VDW_RADII"], rec_grid._spacing, 1.4, 960, rec_grid._crd.shape[0], 0)
+        r_grid = c_points_to_grid(r_grid, rec_grid._spacing, counts)
+        p.dump(r_grid, open(f"{ppi_path}/2.redock/4.receptor_grid/{system}/r_grid.p", "wb"))
 
     for i,rot_crd in enumerate(lig_rot):
         lig_grid._crd = np.array(rot_crd, dtype=np.float64)
@@ -235,8 +236,9 @@ def fft_plot(system):
 
         # Make new Shrake-Rupley SASA Grid
         l_grid = np.zeros(occupancy.shape, dtype=np.float64)
-        l_grid, l_areas = c_sasa(lig_grid._crd, lig_grid._prmtop["VDW_RADII"], lig_grid._spacing, 1.4, 960, l_grid)
-
+        l_grid = c_sasa(lig_grid._crd, lig_grid._prmtop["VDW_RADII"], lig_grid._spacing, 1.4, 960, lig_grid._crd.shape[0], 0)
+        l_grid = c_points_to_grid(l_grid, lig_grid._spacing, counts)
+        
         names = ["occupancy", "sasa"]
         lgrid = lig_grid.get_ligand_grids(names, [0,0,0])
         r_ones = np.copy(sasa)
@@ -285,7 +287,7 @@ def fft_plot(system):
             all_delta_sasas.extend(delta_sasas)
             all_colors.extend(colors)
 
-        name = f'/media/jim/Research_TWO/FFT_PPI/2.redock/7.analysis/{system}/sasa/{i}.jpg'
+        name = f'{ppi_path}/2.redock/7.analysis/{system}/sasa2/{i}.jpg'
 
         regplot(trans_scores, delta_sasas, colors, name, i, system)
         print('plot saved')
@@ -299,8 +301,8 @@ def fft_plot(system):
         del l_grid
 
 
-    final = f'/media/jim/Research_TWO/FFT_PPI/2.redock/7.analysis/{system}/sasa/{system}.jpg'
-    p.dump(rotations, open(f"/media/jim/Research_TWO/FFT_PPI/2.redock/7.analysis/{system}/sasa/rotations.p", "wb" ) )
+    final = f'{ppi_path}/2.redock/7.analysis/{system}/sasa2/{system}.jpg'
+    p.dump(rotations, open(f"{ppi_path}/2.redock/7.analysis/{system}/sasa2/rotations.p", "wb" ) )
     # regplot(all_trans_scores, all_delta_sasas, all_colors, final, "All")
 
 system = args.system
